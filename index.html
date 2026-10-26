@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Poople – 4-letter word game</title>
+  <meta name="description" content="Poople: guess the 4-letter Australian English word. Daily, weekly and random modes.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>💩 Poople</h1>
+    <p class="sub">Guess the 4-letter Aussie word in 6 tries</p>
+    <nav class="modes" role="tablist" aria-label="Game mode">
+      <button role="tab" data-mode="daily" class="active">Daily</button>
+      <button role="tab" data-mode="weekly">Weekly</button>
+      <button role="tab" data-mode="random">Random</button>
+    </nav>
+  </header>
+
+  <main>
+    <div id="status" class="status" aria-live="polite">Loading dictionary…</div>
+    <div id="board" class="board" aria-label="Game board"></div>
+    <div id="actions" class="actions" hidden>
+      <button id="share">Share result</button>
+      <button id="newgame" hidden>New random word</button>
+    </div>
+    <div id="keyboard" class="keyboard" aria-label="Keyboard"></div>
+  </main>
+
+  <div id="toast" class="toast" role="status"></div>
+  <footer>Words come from the en-AU Hunspell dictionary, loaded live. No word list is stored in this site.</footer>
+
+  <script src="script.js"></script>
+</body>
+</html>
