@@ -2,7 +2,7 @@
   "use strict";
 
   const WORD_LEN = 4;
-  const MAX_TRIES = 6;
+  const TARGET = "poop";
 
   // Australian English Hunspell dictionary (wooorm/dictionaries), fetched live.
   const SOURCES = [
@@ -13,14 +13,26 @@
   const CACHE_KEY = "poople-dict-v1";
   const CACHE_DAYS = 30;
 
-  const $ = (id) => document.getElementById(id);
-  const boardEl = $("board"), statusEl = $("status"), kbEl = $("keyboard");
-  const actionsEl = $("actions"), shareBtn = $("share"), newBtn = $("newgame");
+  // Start-word difficulty (shortest number of steps to POOP)
+  const RANGES = {
+    daily: [3, 6],
+    weekly: [6, 99],
+    random: [3, 99],
+  };
 
-  let answers = [];       // possible answers (real 4-letter dictionary words)
-  let validSet = new Set(); // accepted guesses
+  const $ = (id) => document.getElementById(id);
+  const ladderEl = $("ladder"), statusEl = $("status"), kbEl = $("keyboard");
+  const solutionEl = $("solution");
+  const undoBtn = $("undo"), hintBtn = $("hint"), giveBtn = $("giveup");
+  const shareBtn = $("share"), newBtn = $("newgame");
+
+  let answers = [];          // 4-letter dictionary words usable as start words
+  let validSet = new Set();  // every accepted word
+  let dist = new Map();      // word -> shortest steps to POOP
+  let next = new Map();      // word -> next word on a shortest path to POOP
+  let candidates = {};       // mode -> start words
   let mode = localStorage.getItem("poople-mode") || "daily";
-  let game = null;        // { answer, guesses, current, over, won, key }
+  let game = null;           // { key, path, current, won, gaveUp, hints }
 
   /* ---------- dictionary ---------- */
 
@@ -34,13 +46,12 @@
       const slash = line.indexOf("/");
       const stem = slash === -1 ? line : line.slice(0, slash);
       const flags = slash === -1 ? "" : line.slice(slash + 1);
-      // lowercase only: skips proper nouns, acronyms and anything with punctuation
-      if (!/^[a-z]+$/.test(stem)) continue;
+      if (!/^[a-z]+$/.test(stem)) continue; // skips proper nouns, acronyms, punctuation
       if (stem.length === WORD_LEN) {
         answerSet.add(stem);
         valid.add(stem);
       } else if (stem.length === WORD_LEN - 1 && flags.includes("S")) {
-        valid.add(stem + "s"); // plurals are valid guesses but never answers
+        valid.add(stem + "s"); // plurals are valid steps
       }
     }
     return { answers: [...answerSet].sort(), valid: [...valid] };
@@ -66,12 +77,51 @@
         return data;
       } catch (e) { lastErr = e; }
     }
-    // stale cache is better than nothing
     try {
       const stale = JSON.parse(localStorage.getItem(CACHE_KEY) || "null");
       if (stale) return stale;
     } catch (e) { /* ignore */ }
     throw lastErr || new Error("Could not load dictionary");
+  }
+
+  /* ---------- word graph (BFS out from POOP) ---------- */
+
+  function buildGraph() {
+    // Bucket words by wildcard pattern, e.g. "p_op" links poop, prop, ...
+    const buckets = new Map();
+    for (const w of validSet) {
+      for (let i = 0; i < WORD_LEN; i++) {
+        const k = w.slice(0, i) + "_" + w.slice(i + 1);
+        let b = buckets.get(k);
+        if (!b) buckets.set(k, (b = []));
+        b.push(w);
+      }
+    }
+    dist = new Map([[TARGET, 0]]);
+    next = new Map();
+    const queue = [TARGET];
+    for (let h = 0; h < queue.length; h++) {
+      const w = queue[h];
+      for (let i = 0; i < WORD_LEN; i++) {
+        for (const n of buckets.get(w.slice(0, i) + "_" + w.slice(i + 1))) {
+          if (!dist.has(n)) {
+            dist.set(n, dist.get(w) + 1);
+            next.set(n, w);
+            queue.push(n);
+          }
+        }
+      }
+    }
+    // Candidate start words per mode, from real dictionary stems only
+    const reachable = answers.filter((w) => w !== TARGET && dist.has(w));
+    candidates = {};
+    for (const m of Object.keys(RANGES)) {
+      const [lo, hi] = RANGES[m];
+      let list = reachable.filter((w) => dist.get(w) >= lo && dist.get(w) <= hi);
+      if (list.length < 10) list = reachable.filter((w) => dist.get(w) >= 2);
+      if (list.length === 0) list = reachable;
+      candidates[m] = list;
+    }
   }
 
   /* ---------- seeded random ---------- */
@@ -96,83 +146,78 @@
       return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
     };
   }
-  function seededPick(seedStr) {
+  function seededPick(list, seedStr) {
     const rng = mulberry32(xmur3(seedStr)());
-    return answers[Math.floor(rng() * answers.length)];
+    return list[Math.floor(rng() * list.length)];
   }
 
   /* ---------- date keys ---------- */
 
   const pad = (n) => String(n).padStart(2, "0");
   const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  function dailyKey() { return ymd(new Date()); }
+  const dailyKey = () => ymd(new Date());
   function weeklyKey() {
     const d = new Date();
-    const diff = (d.getDay() + 6) % 7; // Monday start
-    d.setDate(d.getDate() - diff);
+    d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); // Monday start
     return ymd(d);
   }
 
   /* ---------- game state ---------- */
 
-  const saveName = (m) => "poople-save-" + m;
+  const saveName = (m) => "poople-ladder-" + m;
 
   function newGame(m, forceNewRandom) {
-    let key, answer;
-    if (m === "daily") { key = dailyKey(); answer = seededPick("poople-daily-" + key); }
-    else if (m === "weekly") { key = weeklyKey(); answer = seededPick("poople-weekly-" + key); }
-    else { key = String(Date.now()); answer = answers[Math.floor(Math.random() * answers.length)]; }
+    let key, start;
+    if (m === "daily") { key = dailyKey(); start = seededPick(candidates.daily, "poople-daily-" + key); }
+    else if (m === "weekly") { key = weeklyKey(); start = seededPick(candidates.weekly, "poople-weekly-" + key); }
+    else { key = String(Date.now()); start = candidates.random[Math.floor(Math.random() * candidates.random.length)]; }
 
     let saved = null;
     if (!forceNewRandom) {
       try { saved = JSON.parse(localStorage.getItem(saveName(m)) || "null"); } catch (e) { /* ignore */ }
     }
-    if (saved && (m === "random" ? answers.includes(saved.answer) : saved.key === key)) {
-      game = { answer: m === "random" ? saved.answer : answer, key: saved.key, guesses: saved.guesses || [], current: "" };
-    } else {
-      game = { answer, key, guesses: [], current: "" };
-    }
-    game.won = game.guesses.includes(game.answer);
-    game.over = game.won || game.guesses.length >= MAX_TRIES;
+    const usable = saved && Array.isArray(saved.path) && saved.path.length &&
+      (m === "random" ? dist.has(saved.path[0]) : saved.key === key);
+    game = usable
+      ? { key: saved.key, path: saved.path, hints: saved.hints || 0, gaveUp: !!saved.gaveUp }
+      : { key, path: [start], hints: 0, gaveUp: false };
+    game.current = "";
+    game.won = game.path[game.path.length - 1] === TARGET;
     persist();
   }
 
   function persist() {
     try {
-      localStorage.setItem(saveName(mode), JSON.stringify({ key: game.key, answer: game.answer, guesses: game.guesses }));
+      localStorage.setItem(saveName(mode), JSON.stringify({
+        key: game.key, path: game.path, hints: game.hints, gaveUp: game.gaveUp,
+      }));
     } catch (e) { /* ignore */ }
   }
 
-  /* ---------- scoring ---------- */
+  const isOver = () => game.won || game.gaveUp;
+  const par = () => dist.get(game.path[0]);
+  const stepsTaken = () => game.path.length - 1;
+  const last = () => game.path[game.path.length - 1];
 
-  function score(guess, answer) {
-    const res = Array(WORD_LEN).fill("absent");
-    const left = {};
-    for (let i = 0; i < WORD_LEN; i++) {
-      if (guess[i] === answer[i]) res[i] = "correct";
-      else left[answer[i]] = (left[answer[i]] || 0) + 1;
-    }
-    for (let i = 0; i < WORD_LEN; i++) {
-      if (res[i] === "correct") continue;
-      if (left[guess[i]] > 0) { res[i] = "present"; left[guess[i]]--; }
-    }
-    return res;
+  function diffCount(a, b) {
+    let n = 0;
+    for (let i = 0; i < WORD_LEN; i++) if (a[i] !== b[i]) n++;
+    return n;
   }
 
   /* ---------- rendering ---------- */
 
-  function buildBoard() {
-    boardEl.innerHTML = "";
-    for (let r = 0; r < MAX_TRIES; r++) {
-      const row = document.createElement("div");
-      row.className = "row";
-      for (let c = 0; c < WORD_LEN; c++) {
-        const t = document.createElement("div");
-        t.className = "tile";
-        row.appendChild(t);
-      }
-      boardEl.appendChild(row);
+  function tileRow(word, prev, cls) {
+    const row = document.createElement("div");
+    row.className = "row";
+    for (let i = 0; i < WORD_LEN; i++) {
+      const t = document.createElement("div");
+      t.className = "tile " + cls;
+      if (prev && word[i] !== prev[i]) t.classList.add("changed");
+      t.textContent = word[i] || "";
+      row.appendChild(t);
     }
+    return row;
   }
 
   function buildKeyboard() {
@@ -193,67 +238,91 @@
     }
   }
 
-  function render(animateRow = -1) {
-    const rows = boardEl.children;
-    const keyState = {};
-    for (let r = 0; r < MAX_TRIES; r++) {
-      const tiles = rows[r].children;
-      const guess = game.guesses[r];
-      const isCurrent = r === game.guesses.length && !game.over;
-      const result = guess ? score(guess, game.answer) : null;
-      for (let c = 0; c < WORD_LEN; c++) {
-        const t = tiles[c];
-        t.className = "tile";
-        t.style.animationDelay = "";
-        if (guess) {
-          t.textContent = guess[c];
-          t.classList.add(result[c]);
-          if (r === animateRow) t.style.animationDelay = c * 0.25 + "s";
-          else t.style.animation = "none";
-          const rank = { absent: 1, present: 2, correct: 3 };
-          if (!keyState[guess[c]] || rank[result[c]] > rank[keyState[guess[c]]]) keyState[guess[c]] = result[c];
-        } else if (isCurrent && game.current[c]) {
-          t.textContent = game.current[c];
-          t.classList.add("filled");
-        } else {
-          t.textContent = "";
-        }
+  function render() {
+    ladderEl.innerHTML = "";
+    game.path.forEach((w, i) => {
+      const cls = i === 0 ? "start" : game.won && i === game.path.length - 1 ? "won" : "step";
+      ladderEl.appendChild(tileRow(w, i > 0 ? game.path[i - 1] : null, cls));
+    });
+
+    if (!isOver()) {
+      const input = document.createElement("div");
+      input.className = "row";
+      input.id = "inputRow";
+      for (let i = 0; i < WORD_LEN; i++) {
+        const t = document.createElement("div");
+        t.className = "tile input" + (game.current[i] ? " filled" : "");
+        t.textContent = game.current[i] || "";
+        input.appendChild(t);
+      }
+      ladderEl.appendChild(input);
+
+      const arrow = document.createElement("div");
+      arrow.className = "arrow";
+      arrow.textContent = "⋮";
+      ladderEl.appendChild(arrow);
+      ladderEl.appendChild(tileRow(TARGET, null, "goal"));
+    }
+    ladderEl.scrollTop = ladderEl.scrollHeight;
+
+    // solution when given up
+    solutionEl.hidden = !game.gaveUp;
+    solutionEl.innerHTML = "";
+    if (game.gaveUp) {
+      const h = document.createElement("div");
+      h.textContent = `Shortest route (${par()} steps):`;
+      solutionEl.appendChild(h);
+      let w = game.path[0], prev = null;
+      solutionEl.appendChild(tileRow(w, null, "sol"));
+      while (w !== TARGET) {
+        prev = w; w = next.get(w);
+        solutionEl.appendChild(tileRow(w, prev, "sol"));
       }
     }
-    kbEl.querySelectorAll(".key").forEach((k) => {
-      const s = keyState[k.dataset.key];
-      k.classList.remove("correct", "present", "absent");
-      if (s) k.classList.add(s);
-    });
 
     document.querySelectorAll(".modes button").forEach((b) =>
       b.classList.toggle("active", b.dataset.mode === mode));
 
-    if (game.over) {
-      statusEl.textContent = game.won
-        ? `Nice! You got it in ${game.guesses.length}/${MAX_TRIES}.`
-        : `The word was "${game.answer.toUpperCase()}".`;
+    const label = { daily: "Today's word", weekly: "This week's word", random: "Random word" }[mode];
+    if (game.won) {
+      const s = stepsTaken();
+      statusEl.textContent = s <= par()
+        ? `POOP in ${s}! That's the shortest route. 💩`
+        : `POOP in ${s} steps (shortest is ${par()}).`;
+    } else if (game.gaveUp) {
+      statusEl.textContent = `Gave up on ${game.path[0].toUpperCase()}.`;
     } else {
-      const label = { daily: "Today's word", weekly: "This week's word", random: "Random word" }[mode];
-      statusEl.textContent = `${label} – ${answers.length.toLocaleString()} words in the dictionary`;
+      statusEl.textContent = `${label}: ${game.path[0].toUpperCase()} → POOP · Steps ${stepsTaken()} · Shortest ${par()}`;
     }
-    actionsEl.hidden = !game.over && mode !== "random";
-    shareBtn.hidden = !game.over;
+
+    const over = isOver();
+    undoBtn.hidden = over; hintBtn.hidden = over; giveBtn.hidden = over;
+    undoBtn.disabled = game.path.length < 2;
+    shareBtn.hidden = !game.won;
     newBtn.hidden = mode !== "random";
+    kbEl.hidden = over;
   }
 
-  function toast(msg) {
+  function toast(msg, ms = 1600) {
     const t = $("toast");
     t.textContent = msg;
     t.classList.add("show");
     clearTimeout(toast.id);
-    toast.id = setTimeout(() => t.classList.remove("show"), 1400);
+    toast.id = setTimeout(() => t.classList.remove("show"), ms);
+  }
+
+  function shake() {
+    const row = $("inputRow");
+    if (!row) return;
+    row.classList.remove("shake");
+    void row.offsetWidth;
+    row.classList.add("shake");
   }
 
   /* ---------- input ---------- */
 
   function press(key) {
-    if (!game || game.over) return;
+    if (!game || isOver()) return;
     if (key === "Enter") return submit();
     if (key === "Backspace") { game.current = game.current.slice(0, -1); return render(); }
     if (/^[a-z]$/.test(key) && game.current.length < WORD_LEN) {
@@ -263,33 +332,53 @@
   }
 
   function submit() {
-    if (game.current.length < WORD_LEN) {
-      shake(); return toast("Not enough letters");
-    }
-    if (!validSet.has(game.current)) {
-      shake(); return toast("Not in the dictionary");
-    }
-    game.guesses.push(game.current);
+    const g = game.current;
+    const from = last();
+    if (g.length < WORD_LEN) { shake(); return toast("Not enough letters"); }
+    if (!validSet.has(g)) { shake(); return toast("Not in the dictionary"); }
+    const d = diffCount(from, g);
+    if (d === 0) { shake(); return toast("That's the same word"); }
+    if (d > 1) { shake(); return toast("Change exactly one letter"); }
+    if (game.path.includes(g)) { shake(); return toast("Already used that word"); }
+    if (!dist.has(g)) { shake(); return toast("Dead end: you can't reach POOP from there"); }
+    game.path.push(g);
     game.current = "";
-    game.won = game.guesses[game.guesses.length - 1] === game.answer;
-    game.over = game.won || game.guesses.length >= MAX_TRIES;
+    game.won = g === TARGET;
     persist();
-    render(game.guesses.length - 1);
+    render();
   }
 
-  function shake() {
-    const row = boardEl.children[game.guesses.length];
-    if (!row) return;
-    row.classList.remove("shake");
-    void row.offsetWidth;
-    row.classList.add("shake");
+  function undo() {
+    if (isOver() || game.path.length < 2) return;
+    game.path.pop();
+    game.current = "";
+    persist();
+    render();
+  }
+
+  function hint() {
+    if (isOver()) return;
+    const n = next.get(last());
+    if (!n) return toast("No hint available");
+    game.hints++;
+    persist();
+    toast(`Try: ${n.toUpperCase()}`, 2500);
+  }
+
+  function giveUp() {
+    if (isOver()) return;
+    if (!confirm("Give up and see the shortest route?")) return;
+    game.gaveUp = true;
+    persist();
+    render();
   }
 
   function shareText() {
-    const emoji = { correct: "🟩", present: "🟨", absent: "⬛" };
-    const grid = game.guesses.map((g) => score(g, game.answer).map((s) => emoji[s]).join("")).join("\n");
     const title = mode === "random" ? "Poople (random)" : `Poople ${mode} ${game.key}`;
-    return `${title} ${game.won ? game.guesses.length : "X"}/${MAX_TRIES}\n${grid}`;
+    const s = stepsTaken();
+    const blocks = "🟫".repeat(Math.max(0, s - 1)) + "💩";
+    const hints = game.hints ? ` · ${game.hints} hint${game.hints > 1 ? "s" : ""}` : "";
+    return `${title}\n${game.path[0].toUpperCase()} → POOP in ${s} (shortest ${par()})${hints}\n${blocks}`;
   }
 
   /* ---------- events ---------- */
@@ -306,12 +395,16 @@
   document.querySelector(".modes").addEventListener("click", (e) => {
     const b = e.target.closest("button[data-mode]");
     if (!b || b.dataset.mode === mode || !answers.length) return;
+    b.blur();
     mode = b.dataset.mode;
     localStorage.setItem("poople-mode", mode);
     newGame(mode);
     render();
   });
-  newBtn.addEventListener("click", () => { newGame("random", true); render(); });
+  undoBtn.addEventListener("click", () => { undoBtn.blur(); undo(); });
+  hintBtn.addEventListener("click", () => { hintBtn.blur(); hint(); });
+  giveBtn.addEventListener("click", () => { giveBtn.blur(); giveUp(); });
+  newBtn.addEventListener("click", () => { newBtn.blur(); newGame("random", true); render(); });
   shareBtn.addEventListener("click", async () => {
     const text = shareText();
     try {
@@ -325,14 +418,16 @@
   /* ---------- start ---------- */
 
   async function start() {
-    buildBoard();
     buildKeyboard();
     statusEl.textContent = "Loading dictionary…";
     try {
       const dict = await fetchDictionary();
       answers = dict.answers;
       validSet = new Set(dict.valid);
-      if (!["daily", "weekly", "random"].includes(mode)) mode = "daily";
+      validSet.add(TARGET);
+      buildGraph();
+      if (!candidates.daily || candidates.daily.length === 0) throw new Error("No playable words found");
+      if (!RANGES[mode]) mode = "daily";
       newGame(mode);
       render();
     } catch (err) {
