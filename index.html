@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Poople – turn the word into POOP</title>
+  <meta name="description" content="Poople: change one letter at a time to turn the word into POOP. Daily, weekly and random modes.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>💩 Poople</h1>
+    <p class="sub">Change <b>one letter</b> at a time to turn the word into <b>POOP</b>.<br>Tap a letter, type its replacement, press Enter. Every step must be a real word.</p>
+    <nav class="modes" role="tablist" aria-label="Game mode">
+      <button role="tab" data-mode="daily" class="active">Daily</button>
+      <button role="tab" data-mode="weekly">Weekly</button>
+      <button role="tab" data-mode="random">Random</button>
+    </nav>
+  </header>
+
+  <main>
+    <div id="status" class="status" aria-live="polite">Loading dictionary…</div>
+    <div id="ladder" class="ladder" aria-label="Word ladder"></div>
+    <div id="solution" class="solution" hidden></div>
+    <div id="actions" class="actions">
+      <button id="undo" class="ghost">Undo</button>
+      <button id="hint" class="ghost">Hint</button>
+      <button id="giveup" class="ghost">Give up</button>
+      <button id="share" hidden>Share result</button>
+      <button id="newgame" hidden>New random word</button>
+    </div>
+    <div id="keyboard" class="keyboard" aria-label="Keyboard"></div>
+  </main>
+
+  <div id="toast" class="toast" role="status"></div>
+  <footer>Words come from the en-AU Hunspell dictionary, loaded live. No word list is stored in this site.</footer>
+
+  <script src="script.js"></script>
+</body>
+</html>
