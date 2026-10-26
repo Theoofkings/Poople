@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Poople – 4-letter word game</title>
-  <meta name="description" content="Poople: guess the 4-letter Australian English word. Daily, weekly and random modes.">
+  <title>Poople – turn the word into POOP</title>
+  <meta name="description" content="Poople: change one letter at a time to turn the word into POOP. Daily, weekly and random modes.">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header>
     <h1>💩 Poople</h1>
-    <p class="sub">Guess the 4-letter Aussie word in 6 tries</p>
+    <p class="sub">Change <b>one letter</b> at a time to turn the word into <b>POOP</b></p>
     <nav class="modes" role="tablist" aria-label="Game mode">
       <button role="tab" data-mode="daily" class="active">Daily</button>
       <button role="tab" data-mode="weekly">Weekly</button>
@@ -20,9 +20,13 @@
 
   <main>
     <div id="status" class="status" aria-live="polite">Loading dictionary…</div>
-    <div id="board" class="board" aria-label="Game board"></div>
-    <div id="actions" class="actions" hidden>
-      <button id="share">Share result</button>
+    <div id="ladder" class="ladder" aria-label="Word ladder"></div>
+    <div id="solution" class="solution" hidden></div>
+    <div id="actions" class="actions">
+      <button id="undo" class="ghost">Undo</button>
+      <button id="hint" class="ghost">Hint</button>
+      <button id="giveup" class="ghost">Give up</button>
+      <button id="share" hidden>Share result</button>
       <button id="newgame" hidden>New random word</button>
     </div>
     <div id="keyboard" class="keyboard" aria-label="Keyboard"></div>
